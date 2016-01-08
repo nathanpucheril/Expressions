@@ -1,8 +1,8 @@
 import utils
 import math
+from copy import deepcopy
 
 # @author: Nathan Pucheril
-
 
 class ExpressionBuilder(object):
 
@@ -20,7 +20,7 @@ class ExpressionBuilder(object):
 
     @staticmethod
     def x(p):
-        return PowerTerm(1, X(), ConstantTerm(p))
+        return PowerTerm(1, X(), p)
 
     @staticmethod
     def log(x):
@@ -49,7 +49,7 @@ class ExpressionBuilder(object):
 
     @staticmethod
     def cons(constant):
-        return ConstantTerm(constant)
+        return constant
 
     @staticmethod
     def coefficient(coefficient, term):
@@ -59,25 +59,43 @@ class ExpressionBuilder(object):
 
 #############################
 
-
 class Expression(object):
 
-    def __init__(self, expressions, var="x"):
+    def __init__(self, expressions):
         assert isinstance(expressions, list), "Terms must be a list"
-        assert isinstance(
-            var, str), "The Variable must be a string representing the Variable"
         assert all(map(Expression.isExpression, expressions)
                    ), "All Terms in an Expression must be of the Class Expression"
-        self.var = var
         self.termsList = expressions
+        self._termFlatten()
         self.c = 1
+
+    def _termFlatten(self):
+        terms = []
+        repeat = 0
+        for term in self.termsList:
+            if term.__class__ == Expression:
+                terms.extend(term.terms)
+                repeat = 1
+            else:
+                terms.append(term)
+        self.termsList = terms
+        if repeat:
+            self._termFlatten()
 
     @property
     def terms(self):
         return self.termsList
 
+    @property
+    def coefficient(self):
+        return self.c
+
     def copy(self):
         return deepcopy(self)
+
+    def set_coefficient(self, coefficient):
+        self.c = coefficient
+        return self
 
     def _clean(self):
         cleaned = []
@@ -89,6 +107,15 @@ class Expression(object):
         self.terms = cleaned
         return self
 
+    def simplify(self):
+        return self._simplifier()
+        # return self
+
+    def _simplifier(self):
+        self.termsList = [term if utils.isnumeric(term) else term.simplify() for term in self.terms]
+        self.termsList = list(filter(lambda x: x, self.terms)) ## NEED TO FIX
+        return self
+
     def __call__(self, x):
         assert utils.isnumeric(x)
         return self.evaluate(x)
@@ -96,61 +123,77 @@ class Expression(object):
     def __add__(e1, e2):
         assert map(Expression.isExpression, (e1, e2)
                    ), "Arguements must be an Expression"
-        assert e1.var == e2.var, "Single Variable Expressions Only"
-        return Expression(e1.terms + e2.terms, e1.var)
+        return Expression([e1 , e2])
+
+    def __radd__(e1,e2):
+        return e1.__add__(e2)
 
     def __sub__(e1, e2):
         # ERROR HANDLING DONE IN ADD
         return e1 + -e2
 
+    def __rsub__(e1,e2):
+        return e1.__sub__(e2)
+
     def __mul__(e1, e2):
         assert map(Expression.isExpression, (e1, e2)
                    ), "Arguements must be of Class Term"
-        assert e1.var == e2.var, "Single Variables Expressions Only"
+        multiplied = 0
+        for term1 in [e1] if utils.isnumeric(e1) else e1.terms:
+            for term2 in [e2] if utils.isnumeric(e2) else e2.terms:
+                multiplied += (term1 * term2)
+        return multiplied
 
-        # MAYBE USE A REDUCE HER
-        multiplied = []
-        for term1 in e1.terms:
-            for term2 in e2.terms:
-                multiplied.append(term1 * term2)
-        return Expression(multiplied)
+    def __rmul__(e1, e2):
+        return e1.__mul__(e2)
 
     def __div__(e1, e2):
         """ p1  divided by p2 -> p1/p2 """
         # Error Handling done in Mul
+        if utils.isnumeric(e2):
+            return e1 * (1.0/e2)
         return e1 * e2.reciprocal()
+
+    def __rdiv__(e1,e2):
+        return e1.__div__(e2)
 
     def __neg__(self):
         # ERROR HANDLING DONE IN MUL
-        return self.copy() * ConstantTerm(-1)
+        return self.copy() * -1
+
+    def __pow__(e1, e2):
+        return PowerTerm(1, e1, e2)
+
+    def __rpow__(e1, e2):
+        return e1.__pow__(e2)
 
     def reciprocal(self):
         return Fraction._fractifyExpression(self).invert()
 
     def invert(self):
-        # Not Inplace because if it isnt of type fraction, must return a
+        # Not In place because if it isnt of type fraction, must return a
         # fraction
         return self.reciprocal()
 
     def derivative(self):
-        return Expression([term.derivative for term in self.terms], self.var)
+        return Expression([term.derivative for term in self.terms])
 
+    @staticmethod
     def isZero(self):
         return False
 
     @staticmethod
     def isExpression(e):
-        return isinstance(e, Expression)
-
-    @staticmethod
-    def make_constant(c):
-        return Expression([PowerTerm(c, X(), 0)])
+        return isinstance(e, Expression) or utils.isnumeric(e)
 
     def evaluate(self, x):
         return sum([term(x) for term in self.termsList])
 
+    def toPolynomial(self):
+        return Polynomial(self.terms)
+
     def __str__(self):
-        output = ""
+        output = str(self.c) if self.c != 1 else ""
         for term in self.terms:
             output += str(term) + " + "
         return output[:len(output) - 3]
@@ -158,11 +201,10 @@ class Expression(object):
 
 class Fraction(Expression):
 
-    def __init__(self, num, den, var="x"):
+    def __init__(self, num, den, ):
         assert map(Expression.isExpression, (num, den))
         assert not Expression.isZero(den)
         # CHECK FOR SIMPLIFIYING FRACTIONS
-        self.var = var
         self.num = num
         self.den = den
         self.reduceCoefficients()
@@ -171,14 +213,14 @@ class Fraction(Expression):
     def terms(self):
         return [self]
 
-    def copy(self):
-        return deepcopy(self)
-
     @staticmethod
     def _fractifyExpression(e):
         if Fraction.isFraction(e):
             return e
-        return Fraction(e, ConstantTerm(1))
+        return Fraction(e, 1)
+
+    def simplify(self):
+        return self
 
     def __add__(f1, f2):
         assert isinstance(f1, Expression) and isinstance(f2, Expression)
@@ -195,16 +237,16 @@ class Fraction(Expression):
     def __div__(f1, f2):
         assert isinstance(f1, Fraction) and isinstance(f2, Fraction)
         return f1 * f2.copy().invert()
-
-    def __neg__(f1):
-        return Fraction(-self.num, self.den)
+    #
+    # def __neg__(f1):
+    #     return Fraction(-self.num, self.den)
 
     def invert(self):
         self.num, self.den = self.den, self.num
         return self
 
     def reciprocal(self):
-        return Fraction(self.den, self.num, self.var)
+        return Fraction(self.den, self.num)
 
     def reduceCoefficients(self):
         coefficients = list(
@@ -239,66 +281,44 @@ class Fraction(Expression):
 
 class Polynomial(Expression):
 
-    def __init__(self, terms, var="x"):
+    def __init__(self, terms):
         assert isinstance(terms, list), "Terms must be a list of tuples"
-        assert isinstance(
-            var, str), "The Variable must be a string representing the Variable"
         for term in terms:
             assert isinstance(
                 term, PowerTerm), "Every Term must be a PowerTerm"
-            assert isinstance(
-                term.exp, ConstantTerm), "Every terms exponent must be a ConstantTerm"
-        super(Polynomial, self).__init__(var)
-        self.termsList = self.unsimplified_terms = terms
-        self._clean()
+            assert utils.isnumeric(term.exp), "Every Term must be a PowerTerm"
+        super(Polynomial, self).__init__(terms)
+        self.termsList = terms
 
-    def _clean(self):
-        self._combine_terms()._simplify()._sort()
-        return self
+    def simplify(self):
+        return self._combine_terms()._simplifier()._sort()
 
-    def sort(self):
-        self.termsList = sorted(self.terms, key=lambda x: x[1], reverse=True)
+    def _sort(self):
+        self.termsList = sorted(self.terms, key=lambda x: x.exp, reverse=True)
         return self
 
     def _combine_terms(self):
-        combined = {}
-        for term in self.terms:
-            exp = term[1]
-            coefficient = term[0]
-            if combined.has_key(exp):
-                combined[exp] = combined[exp] + coefficient
-            else:
-                combined[exp] = coefficient
-        self.termsList = [(v, k)
-                          for k, v in combined.items()]  # FLips Key Value Pairs
+
         return self
 
-    def _simplify(self):
-        simplified = {}
-        for term in self.terms:
-            exp = term[1]
-            coefficient = term[0]
-            if coefficient == 0:
-                continue
-            else:
-                simplified[exp] = coefficient
-        # FLips Key Value Pairs
-        self.termsList = [(v, k) for k, v in simplified.items()]
+    def _simplifier(self):
+
+        self.termsList = list(filter(lambda x: x, self.terms))
         return self
 
     # Done
     def __str__(self):
         output = ""
         for term in self.terms:
-            c, exp = term
+            c, exp = term.c, term.exp
             if c == 0:
                 continue
             elif exp == 0:
                 output += str(c) + " + "
             elif c == 1:
-                output += self.var + "^" + str(term[1]) + " + "
+                output +="^" + str(exp) + " + "
             else:
-                output += str(term[0]) + self.var + "^" + str(term[1]) + " + "
+                output += str(c) +  "^" + str(exp) + " + "
         output = output[: len(output) - 3]
         return output
 
@@ -307,118 +327,98 @@ class Polynomial(Expression):
 
 class Term(Expression):
 
-    def __init__(self, var="x"):
-        super(Term, self).__init__([self], var)
+    def __init__(self):
+        super(Term, self).__init__([self])
 
     @property
     def terms(self):
         return [self]
 
-    @property
-    def coefficient(self):
-        return self.c
+    def __mul__(m1, m2):
+        assert map(Term.isTerm, (m1, m2)
+                   ), "Arguements must be of type ExponentialTerm"
+        return MultTerm([m1, m2])
 
-    def copy(self):
-        return deepcopy(self)
-
-    def set_coefficient(self, coefficient):
-        self.c = coefficient
+    def simplify(self):
         return self
-
-    def __add__(t1, t2):
-        assert map(Term.isTerm, (t1, t2)
-                   ), "Arguements must be of type ExponentialTerm"
-        if t1.__class__ == t2.__class__:
-            return t1 + t2
-        return Expression([t1, t2])
-
-    def __mul__(t1, t2):
-        assert map(Term.isTerm, (t1, t2)
-                   ), "Arguements must be of type ExponentialTerm"
-        if t1.__class__ == t2.__class__:
-            return t1 * t2
-        return Expression([MultTerm(t1, t2)])
 
     @staticmethod
     def isTerm(t):
         return isinstance(t, Term)
 
 
-class ConstantTerm(Term):
-
-    def __init__(self, constant=1, var="x"):
-        assert utils.isnumeric(
-            constant), "ConstantTerm Takes in a numeric value"
-        super(ConstantTerm, self).__init__(var)
-        self.constant = constant
-
-    def evaluate(self, x):
-        return self.constant
-
-    def __add__(c1, c2):
-        assert map(Expression.isExpression, (c1, c2)
-                   ), "Arguements must be an Expression"
-        assert c1.var == c2.var, "Single Variable Expressions Only"
-        if c1.__class__ == c2.__class__:
-            return ConstantTerm(c1.constant + c2.constant, c1.var)
-        return Expression(c1.terms + c2.terms, c1.var)
-
-    def __mul__(c1, c2):
-        assert map(Expression.isExpression, (c1, c2)
-                   ), "Arguements must be of Class Term"
-        assert c1.var == c2.var, "Single Variables Expressions Only"
-        if c1.__class__ == c2.__class__:
-            return ConstantTerm(c1.constant * c2.constant, c1.var)
-        return MultTerm((c1, c2), c1.var)
-
-    def derivative(self):
-        return ConstantTerm(0)
-
-    def __str__(self):
-        return str(self.constant)
-
-
 class X(Term):
 
     def __init__(self, var="x"):
-        super(X, self).__init__(var)
+        super(X, self).__init__()
+        self.var = var
 
     def evaluate(self, x):
         return x
 
     def __add__(x1, x2):
-        assert map(Expression.isExpression, (c1, c2)
+        assert map(Expression.isExpression, (x1, x2)
                    ), "Arguements must be an Expression"
-        assert x1.var == x2.var, "Single Variable Expressions Only"
-        if x1.__class__ == x1.__class__:
-            return PowerTerm(2, X(), ConstantTerm(1), x1.var)
-        return Expression(x1.terms + x2.terms, x1.var)
+        if x1.__class__ == x2.__class__:
+            return PowerTerm(2, x1, 1)
+        if utils.isnumeric(x2):
+            return Expression(x1.terms + [x2])
+        return Expression(x1.terms + x2.terms)
 
     def __mul__(x1, x2):
         assert map(Expression.isExpression, (x1, x2)
-                   ), "Arguements must be of Class Term"
-        assert x1.var == x2.var, "Single Variables Expressions Only"
+                   ), "Arguements must be an Expression"
+        if x2.__class__ == Expression:
+            return x2.__mul__(x1)
         if x1.__class__ == x2.__class__:
-            return PowerTerm(1, X(), ConstantTerm(2), x1.var)
-        return MultTerm((x1, c2), x1.var)
+            return PowerTerm(1, x1, 2)
+        if x2.__class__ == PowerTerm:
+            x2copy = x2.copy()
+            return x2copy.set_exp(x2copy.exp + 1)
+        if utils.isnumeric(x2):
+            return PowerTerm(x2, x1, 1)
+        return MultTerm((x1, x2))
 
     def __neg__(self):
         # ERROR HANDLING DONE IN MUL
-        return PowerTerm(-1, X(), 1, x1.var)
+        return PowerTerm(-1, self, 1)
 
     def __str__(self):
         return self.var
 
+    @staticmethod
+    def isX(x):
+        return isinstance(x, X)
+
     def derivative(self):
-        return ConstantTerm(1)
+        return 1
 
 
 class MultTerm(Term):
 
-    def __init__(self, terms, var="x"):
-        super(MultTerm, self).__init__(var)
-        self.termsMultiplied = terms
+    def __init__(self, terms):
+        super(MultTerm, self).__init__()
+        self.termsMultiplied = list(terms)
         self.c = 1
+        for term in self.termsMultiplied:
+            if utils.isnumeric(term):
+                self.c *= term
+                self.termsMultiplied.remove(term)
+
+    def __mul__(m1, m2):
+        assert map(Expression.isExpression, (m1, m2)
+                   ), "Arguements must be of type ExponentialTerm"
+        if m2.__class__ == Expression:
+            return m2 * m1
+        if m1.__class__ == m2.__class__:
+            return MultTerm(m1.termsMultiplied + m2.termsMultiplied)
+        return MultTerm([m1, m2])
+
+    def simplify(self):
+        if self.c == 0:
+            return 0
+        else:
+            self.termsMultiplied = [term.simplify() for term in self.termsMultiplied]
 
     def evaluate(self, x):
         product = 1
@@ -426,76 +426,94 @@ class MultTerm(Term):
             product *= term.evaluate(x)
         return product
 
-    def __mul__(m1, m2):
-        assert map(Term.isTerm, (m1, m2)
-                   ), "Arguements must be of type ExponentialTerm"
-        assert m1.var == m2.var, "Variable must be the same"
-        return MultTerm((m1, m2), m1.var)
-
     def __str__(self):
-        output = ""
-        total_coefficient = 1
+        output = str(self.c) + "*"
         for term in self.termsMultiplied:
-            total_coefficient *= term.c
-            output += (str(term) + "*")[1:]
-        return str(total_coefficient) + output[: len(output) - 1]
+            output += "(" + str(term) + ")" + "*"
+        return  output[: len(output) - 1]
 
 
 class PowerTerm(Term):
 
-    def __init__(self, coefficient=1, main=X(), exp=ConstantTerm(1), var="x"):
-        super(PowerTerm, self).__init__(var)
+    def __init__(self, coefficient=1, main=X(), exp=1):
+        super(PowerTerm, self).__init__()
         assert utils.isnumeric(coefficient), "Coefficient must be a number"
-        assert isinstance(main, Expression)
-        assert isinstance(exp, Expression)
+        assert Expression.isExpression(main)
+        assert Expression.isExpression(exp)
         self.c = coefficient
         self.main = main
         self.exp = exp
 
+    def set_exp(self, exp):
+        self.exp = exp
+        return self
+
+    def simplify(self):
+        return self._simplifier()
+
+    def _simplifier(self):
+        if self.exp == 0:
+            return self.c
+        if self.c == 0:
+            return 0
+        return self
+
     def __add__(p1, p2):
         assert map(Expression.isExpression, (p1, p2)
                    ), "Arguements must be of type ExponentialTerm"
-        if p1.exp == p2.exp and p1.main == p2.main:
+        if p2 == 0:
+            return p1
+        if PowerTerm.isPwrTerm(p2) and p1.exp == p2.exp and p1.main == p2.main:
             return PowerTerm(p1.c + p2.c, p1.main, p1.exp)
         else:
             return Expression([p1, p2])
 
-
     def __mul__(p1, p2):
         assert map(Expression.isExpression, (p1, p2)
                    ), "Arguements must be of type ExponentialTerm"
-        if p1.__class__ == p2.__class__ and p1.exp == p2.exp and p1.main == p2.main:
-                return PowerTerm(p1.c * p2.c, p1.main, p1.exp + p2.exp)
+        if p2.__class__ == Expression:
+            return p2.__mul__(p1)
+        if p1.__class__ == p2.__class__ and p1.main == p2.main:
+            return PowerTerm(p1.c * p2.c, p1.main, p1.exp + p2.exp)
         if isinstance(p2, X):
-            cp = p1.copy()
-            cp.exp += ConstantTerm(1)
-            return cp
+            copy = p1.copy()
+            return copy.set_exp(copy.exp + 1)
+        if utils.isnumeric(p2):
+            return PowerTerm(p1.c * p2, p1.main, p1.exp)
         return MultTerm([p1, p2])
-
-
-    def __neg__(p1):
-        return PowerTerm(-p1.c, p1.main, p1.exp)
 
     def evaluate(self, x):
         return self.c * pow(self.main(x), self.exp(x))
 
+    @staticmethod
     def isPwrTerm(p):
         return isinstance(p, PowerTerm)
 
     def __str__(self):
-        if self.exp == 0:
-            return str(self.c)
+        o_paran = "(" if not Term.isTerm(self.main) else ""
+        c_paran = ")" if not Term.isTerm(self.main) else ""
+
+        output = ""
+
+        main = str(self.main)
+        exp = "^" + str(self.exp)
+        coefficient = str(self.c)
+
         if self.c == 0:
             return "0"
+        if self.exp == 0:
+            return str(self.c)
+        if self.exp == 1:
+            exp = ""
         if self.c == 1:
-            return self.var + "^" + str(self.exp)
-        return str(self.c) + self.var + "^" + str(self.exp)
+            return o_paran + main + c_paran + exp
+        return o_paran + coefficient + main + c_paran + exp
 
 
 class ExponentialTerm(Term):
 
-    def __init__(self, coefficient=1, exp=ConstantTerm(1), var="x"):
-        super(ExponentialTerm, self).__init__(var)
+    def __init__(self, coefficient=1, exp=1):
+        super(ExponentialTerm, self).__init__()
         assert isinstance(exp, Expression)
         self.c = coefficient
         self.exp = exp
@@ -503,64 +521,73 @@ class ExponentialTerm(Term):
     def __add__(e1, e2):
         assert map(ExponentialTerm.isExpTerm, (e1, e2)
                    ), "Arguements must be of type ExponentialTerm"
+        if e2 == 0:
+            return e1
         if e1.exp == e2.exp:
             return ExponentialTerm(e1.c + e2.c, e1.exp)
         else:
             return Expression([e1, e2])
 
+    def simplify(self):
+        if self.c == 0:
+            return 0
+        return self
 
-    def multiply(e1, e2):
-        assert map(ExponentialTerm.isExpTerm, (e1, e2)
+    def __mul__(e1, e2):
+        assert map(Expression.isExpression, (e1, e2)
                    ), "Arguements must be of type ExponentialTerm"
-        return ExponentialTerm(e1.c * e2.c, e1.exp + e2.exp)
-
-        def __neg__(e1):
-            return ExponentialTerm(-e1.c, e1.exp)
-
+        if e2.__class__ == Expression:
+            return e2.__mul__(e1)
+        if ExponentialTerm.isExpTerm(e2):
+            return ExponentialTerm(e1.c * e2.c, e1.exp + e2.exp)
+        return MultTerm([e1, e2])
 
     def evaluate(self, x):
         return self.c * math.exp(self.exp(x))
 
-        def isExpTerm(e):
-            return isinstance(e, ExponentialTerm)
+    def isExpTerm(e):
+        return isinstance(e, ExponentialTerm)
 
-        def __str__(self):
-            if self.exp == 0:
-                return str(self.c)
-            if self.c == 0:
-                return "0"
-            else:
-                return str(self.c) + "e" + "^(" + str(self.exp) + "x)"
+    def __str__(self):
+        if self.exp == 0:
+            return str(self.c)
+        if self.c == 0:
+            return "0"
+        else:
+            return str(self.c) + "e" + "^(" + str(self.exp) + "x)"
 
 
 class LogTerm(Term):
     """c*log_base(Beta * x)"""
 
-    def __init__(self, insideTerm, coefficient=1, base=10, var="x"):
-        super(LogTerm, self).__init__(var)
+    def __init__(self, insideTerm, coefficient=1, base=10):
+        super(LogTerm, self).__init__()
         assert Expression.isExpression(insideTerm)
         self.c = coefficient
         self.base = base
         self.insideTerm = insideTerm
 
-    def __add__(l1, l2):
-        assert map(Expression.isExpression, (l1, l2)
-                   ), "Arguements must be of type ExponentialTerm"
-        return Expression([l1, l2])
-
     def __mul__(l1, l2):
+        assert map(Expression.isExpression, (e1, e2)
+                   ), "Arguements must be of type ExponentialTerm"
+        if x2.__class__ == Expression:
+            return x2.__mul__(x1)
+        if LogTerm.isLogTerm(l2) and l2.base == l1.base:
+            return LogTerm(PowerTerm(1,l1.insideTerm,l1.c) + PowerTerm(1,l2.insideTerm, l2.c),1, l1.base)
         return MultTerm((l1, l2))
+
+    def simplify(self):
+        self.insideTerm = self.insideTerm.simplify()
+        return self
 
     def evaluate(self, x):
         return self.c * math.log(self.insideTerm(x), self.base)
 
-    def isLogTerm(e):
-        return isinstance(e, LogTerm)
+    @staticmethod
+    def isLogTerm(l):
+        return isinstance(l, LogTerm)
 
     def __str__(self):
         base = "e" if self.base == math.e else str(self.base)
-        return str(self.c) + "log_" + base + "(" + str(self.insideTerm) + ")"
-
-eb = ExpressionBuilder
-e = eb.log(eb.x(2))
-print(e * e)
+        coeff = str(self.c) if self.c != 1 else ""
+        return coeff + "log_" + base + "(" + str(self.insideTerm) + ")"
