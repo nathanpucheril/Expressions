@@ -1,4 +1,5 @@
 import utils
+from utils import reduce, list_to_listOfTypes
 import math
 from copy import deepcopy
 
@@ -97,28 +98,29 @@ class Expression(object):
         self.c = coefficient
         return self
 
-    def _clean(self):
-        cleaned = []
-        for term in self.terms:
-            c = term.coefficient
-            if c == 0:
-                continue
-            cleaned.append(term)
-        self.terms = cleaned
-        return self
+    @staticmethod
+    def _expressify(e):
+        return Expression([e])
 
     def simplify(self):
-        return self._simplifier()
-        # return self
-
-    def _simplifier(self):
-        self.termsList = [term if utils.isnumeric(term) else term.simplify() for term in self.terms]
+        print(self)
+        for term in self.terms:
+            lst = []
+            if utils.isnumeric(term):
+                lst.append(term)
+            else:
+                lst.append(term.simplify())
         self.termsList = list(filter(lambda x: x, self.terms)) ## NEED TO FIX
+        # print(self.termsList)
+        # listLists = utils.list_to_listOfTypes(self.termsList, lambda x: x.__class__)
+
+
         return self
 
-    def __call__(self, x):
-        assert utils.isnumeric(x)
-        return self.evaluate(x)
+    def __call__(self, *args):
+        print(args)
+        assert all(map(lambda x: utils.isnumeric(x[1]), args))
+        return self.evaluate(*args)
 
     def __add__(e1, e2):
         assert map(Expression.isExpression, (e1, e2)
@@ -157,6 +159,18 @@ class Expression(object):
     def __rdiv__(e1,e2):
         return e1.__div__(e2)
 
+    def __truediv__(e1,e2):
+        return e1.__div__(e2)
+
+    def __rtruediv__(e1,e2):
+        return e1.__truediv__(e2)
+
+    def __floordiv__(e1,e2):
+        return e1.__truediv__(e2)
+
+    def __rfloordiv__(e1,e2):
+        return e1.__truediv__(e2)
+
     def __neg__(self):
         # ERROR HANDLING DONE IN MUL
         return self.copy() * -1
@@ -186,8 +200,15 @@ class Expression(object):
     def isExpression(e):
         return isinstance(e, Expression) or utils.isnumeric(e)
 
-    def evaluate(self, x):
-        return sum([term(x) for term in self.termsList])
+    def evaluate(self, *args):
+        evaluated = []
+        for term in self.termsList:
+            if utils.isnumeric(term):
+                evaluated.append(term)
+            else:
+                evaluated.append(term(*args))
+
+        return sum(evaluated)
 
     def toPolynomial(self):
         return Polynomial(self.terms)
@@ -201,12 +222,12 @@ class Expression(object):
 
 class Fraction(Expression):
 
-    def __init__(self, num, den, ):
+    def __init__(self, num, den):
         assert map(Expression.isExpression, (num, den))
         assert not Expression.isZero(den)
         # CHECK FOR SIMPLIFIYING FRACTIONS
-        self.num = num
-        self.den = den
+        self.num = Expression._expressify(num)
+        self.den = Expression._expressify(den)
         self.reduceCoefficients()
 
     @property
@@ -220,7 +241,7 @@ class Fraction(Expression):
         return Fraction(e, 1)
 
     def simplify(self):
-        return self
+        return Fraction(self.num.simplify(), self.den.simplify())
 
     def __add__(f1, f2):
         assert isinstance(f1, Expression) and isinstance(f2, Expression)
@@ -235,7 +256,8 @@ class Fraction(Expression):
         return Fraction(f1.num * f2.num, f1.den * f2.den)
 
     def __div__(f1, f2):
-        assert isinstance(f1, Fraction) and isinstance(f2, Fraction)
+        f1 = Fraction._fractifyExpression(f1)
+        f2 = Fraction._fractifyExpression(f2)
         return f1 * f2.copy().invert()
     #
     # def __neg__(f1):
@@ -249,8 +271,10 @@ class Fraction(Expression):
         return Fraction(self.den, self.num)
 
     def reduceCoefficients(self):
+        allTerms = self.num.terms + self.den.terms
         coefficients = list(
-            term.coefficient for term in self.num.terms + self.den.terms)
+            term if utils.isnumeric(term) else term.coefficient
+                for term in allTerms)
 
         def gcd_help(x, y):
             x, y = map(abs, (x, y))
@@ -260,14 +284,15 @@ class Fraction(Expression):
                 return x
             return gcd_help(y, x % y)
         gcd = reduce(gcd_help, coefficients)
-        for x in self.num.terms:
-            x.set_coefficient(x.coefficient / gcd)
-        for x in self.den.terms:
-            x.set_coefficient(x.coefficient / gcd)
+        for term in allTerms:
+            if utils.isnumeric(term):
+                term /= gcd
+            else:
+                term.set_coefficient(term.coefficient / gcd)
         return self
 
-    def evaluate(self, x):
-        return self.num(x) / self.den(x)
+    def evaluate(self, *args):
+        return self.num(*args) / self.den(*args)
 
     @staticmethod
     def isFraction(f):
@@ -353,8 +378,10 @@ class X(Term):
         super(X, self).__init__()
         self.var = var
 
-    def evaluate(self, x):
-        return x
+    def evaluate(self, *args):
+        for arg in args:
+            if arg[0].var == self.var:
+                return arg[1]
 
     def __add__(x1, x2):
         assert map(Expression.isExpression, (x1, x2)
@@ -371,13 +398,10 @@ class X(Term):
         if x2.__class__ == Expression:
             return x2.__mul__(x1)
         if x1.__class__ == x2.__class__:
-            return PowerTerm(1, x1, 2)
-        if x2.__class__ == PowerTerm:
-            x2copy = x2.copy()
-            return x2copy.set_exp(x2copy.exp + 1)
+            return PowerTerm(1, x1, 2) if x1.var == x2.var else MultTerm((x1, x2))
         if utils.isnumeric(x2):
             return PowerTerm(x2, x1, 1)
-        return MultTerm((x1, x2))
+        return x2.__mul__(x1)
 
     def __neg__(self):
         # ERROR HANDLING DONE IN MUL
@@ -401,9 +425,18 @@ class MultTerm(Term):
         self.termsMultiplied = list(terms)
         self.c = 1
         for term in self.termsMultiplied:
+            if MultTerm.isMultTerm(term):
+                self.termsMultiplied.extend(term.termsMultiplied)
+                self.c *= term.c
+                self.termsMultiplied.remove(term)
+
+        for term in self.termsMultiplied:
             if utils.isnumeric(term):
                 self.c *= term
                 self.termsMultiplied.remove(term)
+            else:
+                self.c *= term.c
+                term.set_coefficient(1)
 
     def __mul__(m1, m2):
         assert map(Expression.isExpression, (m1, m2)
@@ -419,15 +452,21 @@ class MultTerm(Term):
             return 0
         else:
             self.termsMultiplied = [term.simplify() for term in self.termsMultiplied]
+        return self
 
-    def evaluate(self, x):
+    def evaluate(self, *args):
         product = 1
         for term in self.termsMultiplied:
-            product *= term.evaluate(x)
+            product *= term(*args)
         return product
 
+    @staticmethod
+    def isMultTerm(m):
+        return isinstance(m, MultTerm)
+
     def __str__(self):
-        output = str(self.c) + "*"
+
+        output = "" if self.c == 1 else str(self.c) + "*"
         for term in self.termsMultiplied:
             output += "(" + str(term) + ")" + "*"
         return  output[: len(output) - 1]
@@ -475,15 +514,21 @@ class PowerTerm(Term):
             return p2.__mul__(p1)
         if p1.__class__ == p2.__class__ and p1.main == p2.main:
             return PowerTerm(p1.c * p2.c, p1.main, p1.exp + p2.exp)
-        if isinstance(p2, X):
+        if p2 == p1.main:
             copy = p1.copy()
             return copy.set_exp(copy.exp + 1)
         if utils.isnumeric(p2):
             return PowerTerm(p1.c * p2, p1.main, p1.exp)
+        if p2.__class__ == Fraction:
+            return p2.__mul__(p1)
+
         return MultTerm([p1, p2])
 
-    def evaluate(self, x):
-        return self.c * pow(self.main(x), self.exp(x))
+    def evaluate(self, *args):
+        m, e = self.main, self.exp
+        mainVal = m if utils.isnumeric(m) else m(*args)
+        expVal = e if utils.isnumeric(e) else e(*args)
+        return self.c * pow(mainVal, expVal)
 
     @staticmethod
     def isPwrTerm(p):
@@ -540,10 +585,13 @@ class ExponentialTerm(Term):
             return e2.__mul__(e1)
         if ExponentialTerm.isExpTerm(e2):
             return ExponentialTerm(e1.c * e2.c, e1.exp + e2.exp)
+        if e2.__class__ == X:
+            e2 = PowerTerm(1, p2, 1)
         return MultTerm([e1, e2])
 
-    def evaluate(self, x):
-        return self.c * math.exp(self.exp(x))
+    def evaluate(self, *args):
+        expVal = self.exp if utils.isnumeric(self.exp) else self.exp(*args)
+        return self.c * math.exp(expVal)
 
     def isExpTerm(e):
         return isinstance(e, ExponentialTerm)
@@ -563,6 +611,7 @@ class LogTerm(Term):
     def __init__(self, insideTerm, coefficient=1, base=10):
         super(LogTerm, self).__init__()
         assert Expression.isExpression(insideTerm)
+        assert Expression.isExpression(base)
         self.c = coefficient
         self.base = base
         self.insideTerm = insideTerm
@@ -574,14 +623,19 @@ class LogTerm(Term):
             return x2.__mul__(x1)
         if LogTerm.isLogTerm(l2) and l2.base == l1.base:
             return LogTerm(PowerTerm(1,l1.insideTerm,l1.c) + PowerTerm(1,l2.insideTerm, l2.c),1, l1.base)
+        if e2.__class__ == X:
+            e2 = PowerTerm(1, p2, 1)
         return MultTerm((l1, l2))
 
     def simplify(self):
         self.insideTerm = self.insideTerm.simplify()
         return self
 
-    def evaluate(self, x):
-        return self.c * math.log(self.insideTerm(x), self.base)
+    def evaluate(self, *args):
+        i, b = self.insideTerm, self.base
+        insideVal = i if utils.isnumeric(i) else i(*args)
+        baseVal = b if utils.isnumeric(b) else b(*args)
+        return self.c * math.log(insideVal, baseVal)
 
     @staticmethod
     def isLogTerm(l):
@@ -591,3 +645,13 @@ class LogTerm(Term):
         base = "e" if self.base == math.e else str(self.base)
         coeff = str(self.c) if self.c != 1 else ""
         return coeff + "log_" + base + "(" + str(self.insideTerm) + ")"
+
+y = X("y")
+z = X("z")
+x = X()
+#
+a = ((512*y*3) / (12 * y)) * z / x
+a = a.simplify()
+print(a)
+# print(a((y, 1), (z, 1),(x, 1) ))
+# print(y((y,2)))
