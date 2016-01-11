@@ -5,120 +5,53 @@ from copy import deepcopy
 
 # @author: Nathan Pucheril
 
-class ExpressionBuilder(object):
-
-    @staticmethod
-    def parse(string):
-        pass
-
-    @staticmethod
-    def make_polynomial(terms):
-        return Polynomial(terms)
-
-    def __div__(num, den):
-        # handle cases of inserting constants and expressions
-        return Fraction(num, den)
-
-    @staticmethod
-    def x(p):
-        return PowerTerm(1, X(), p)
-
-    @staticmethod
-    def log(x):
-        # if not Expression.isExpression(x):
-        #     Expressify
-
-        return LogTerm(x)
-
-    @staticmethod
-    def ln(x):
-        return LogTerm(x, 1, math.e)
-
-    @staticmethod
-    def log_base(base, x):
-        return LogTerm(x, 1, base)
-
-    def __add__(x, y):
-        return x + y
-
-    def __mul__(x, y):
-        return x * y
-
-    @staticmethod
-    def exp(x):
-        return ExponentialTerm(1, x)
-
-    @staticmethod
-    def cons(constant):
-        return constant
-
-    @staticmethod
-    def coefficient(coefficient, term):
-        c = Expression.make_constant(constant)
-        term.set_coefficient(c)
-        return term
-
-#############################
 
 class Expression(object):
 
     def __init__(self, expressions):
-        assert isinstance(expressions, list), "Terms must be a list"
-        assert all(map(Expression.isExpression, expressions)
-                   ), "All Terms in an Expression must be of the Class Expression"
-        self.termsList = expressions
-        self._termFlatten()
+        self.termsList = None
+        self.set_terms(utils.termsFlattener(expressions))
         self.c = 1
-
-    def _termFlatten(self):
-        terms = []
-        repeat = 0
-        for term in self.termsList:
-            if term.__class__ == Expression:
-                terms.extend(term.terms)
-                repeat = 1
-            else:
-                terms.append(term)
-        self.termsList = terms
-        if repeat:
-            self._termFlatten()
 
     @property
     def terms(self):
         return self.termsList
 
+    def set_terms(self, terms):
+        assert isinstance(terms, list), "Terms must be a list"
+        assert all(map(Expression.isExpression, terms)
+                ), "All Terms in an Expression must be an Expression"
+        self.termsList = utils.termsFlattener(terms)
+        if self.termsList == []:
+            self.termsList = [0]
+        return self.terms
+
     @property
     def coefficient(self):
         return self.c
 
-    def copy(self):
-        return deepcopy(self)
-
     def set_coefficient(self, coefficient):
         self.c = coefficient
         return self
+
+    def copy(self):
+        return deepcopy(self)
 
     @staticmethod
     def _expressify(e):
         return Expression([e])
 
     def simplify(self):
-        print(self)
         for term in self.terms:
             lst = []
             if utils.isnumeric(term):
                 lst.append(term)
             else:
                 lst.append(term.simplify())
-        self.termsList = list(filter(lambda x: x, self.terms)) ## NEED TO FIX
-        # print(self.termsList)
-        # listLists = utils.list_to_listOfTypes(self.termsList, lambda x: x.__class__)
-
-
+        self.set_terms(list(filter(lambda x: x, self.terms))) ## NEED TO FIX
         return self
 
     def __call__(self, *args):
-        print(args)
         assert all(map(lambda x: utils.isnumeric(x[1]), args))
         return self.evaluate(*args)
 
@@ -194,6 +127,8 @@ class Expression(object):
 
     @staticmethod
     def isZero(self):
+        if str(self) == "0":
+            return True
         return False
 
     @staticmethod
@@ -212,6 +147,9 @@ class Expression(object):
 
     def toPolynomial(self):
         return Polynomial(self.terms)
+
+    def __eq__(e1, e2):
+        return str(e1) == str(e2) or (e1 - e2).isZero() or str((e1 - e2).isZero()) # FIX THIS
 
     def __str__(self):
         output = str(self.c) if self.c != 1 else ""
@@ -241,7 +179,8 @@ class Fraction(Expression):
         return Fraction(e, 1)
 
     def simplify(self):
-        return Fraction(self.num.simplify(), self.den.simplify())
+        return Fraction(self.num.simplify(),
+            self.den.simplify()).reduceCoefficients()
 
     def __add__(f1, f2):
         assert isinstance(f1, Expression) and isinstance(f2, Expression)
@@ -259,9 +198,6 @@ class Fraction(Expression):
         f1 = Fraction._fractifyExpression(f1)
         f2 = Fraction._fractifyExpression(f2)
         return f1 * f2.copy().invert()
-    #
-    # def __neg__(f1):
-    #     return Fraction(-self.num, self.den)
 
     def invert(self):
         self.num, self.den = self.den, self.num
@@ -307,44 +243,132 @@ class Fraction(Expression):
 class Polynomial(Expression):
 
     def __init__(self, terms):
-        assert isinstance(terms, list), "Terms must be a list of tuples"
+        assert isinstance(terms, list), "Terms must be a list "
         for term in terms:
-            assert isinstance(
-                term, PowerTerm), "Every Term must be a PowerTerm"
-            assert utils.isnumeric(term.exp), "Every Term must be a PowerTerm"
+            assert PowerTerm.isPwrTerm(term) or utils.isnumeric(term), "Every Term must be a PowerTerm" + " " + str(term)
+            assert utils.isnumeric(term) or utils.isnumeric(term.exp), "Every Term must be a PowerTerm"
         super(Polynomial, self).__init__(terms)
-        self.termsList = terms
+        self.set_terms(terms)
+        self.maxDegree = None
+
 
     def simplify(self):
-        return self._combine_terms()._simplifier()._sort()
+        newTerms = []
+        for term in self.terms:
+            if utils.isnumeric(term):
+                if term != 0:
+                    newTerms.append(term)
+            elif term.c != 0:
+                newTerms.append(term)
+        self.set_terms(newTerms)
+        return self._combine_terms()._sort()
 
     def _sort(self):
-        self.termsList = sorted(self.terms, key=lambda x: x.exp, reverse=True)
+        degree_fn = lambda x: 0 if utils.isnumeric(x) else x.exp
+        self.set_terms(sorted(self.terms, key = degree_fn, reverse = True))
         return self
 
     def _combine_terms(self):
-
+        degree_fn = lambda x: 0 if utils.isnumeric(x) else x.exp
+        sep_degrees = utils.list_to_listOfTypes(self.terms, degree_fn)
+        self.set_terms(list(map(sum, sep_degrees)))
         return self
 
-    def _simplifier(self):
+    def __add__(p1, p2):
+        added = Expression.__add__(p1,p2)
+        return Polynomial.polify(added) if p2.__class__ == Polynomial else added
 
-        self.termsList = list(filter(lambda x: x, self.terms))
-        return self
+    def __mul__(p1, p2):
+        mult = Expression.__mul__(p1,p2)
+        return Polynomial.polify(mult) if p2.__class__ == Polynomial else mult
+
+    def __mod__(p1, p2):
+        assert Polynomial.isPolynomial(p2)
+        return Polynomial._divider(p1,p2, "modulo")
+
+    def __rmod__(p1, p2):
+        return p1.__mod__(p2)
+
+    def __div__(e1, e2):
+        """ p1  divided by p2 -> p1/p2 """
+        return p1.__truediv__(p2)
+
+    def __truediv__(e1,e2):
+        assert Polynomial.isPolynomial(p2)
+        return p1._divider(p2)
+
+    def __floordiv__(e1,e2):
+        assert Polynomial.isPolynomial(p2)
+        return p1._divider(p2, "floordiv")
+
+    def isZero(self):
+        self.simplify()
+        return self.terms == [0] or str(self) == "0"
+
+    def _divider(p1, p2, op = "truediv"):
+        p1 = Polynomial.polify(p1).simplify()
+        p2 = Polynomial.polify(p2).simplify()
+
+        if p1.isZero():
+            return 0
+        if p1.degree < p2.degree:
+            if op == "truediv":
+                return Fraction(p1 , p2)
+            if op == "floordiv":
+                return 0
+            if op == "modulo":
+                return p1
+        divisorTerms = []
+
+        p1Term1 = p1.terms[0]
+        p1Term1_coeff = p1Term1 if utils.isnumeric(p1Term1) else p1Term1.c
+        p2Term2 = p2.terms[0]
+        p2Term1_coeff = p2Term2 if utils.isnumeric(p2Term2) else p2Term2.c
+
+        divisorVal = PowerTerm(p1Term1_coeff / p2Term1_coeff, x, p1.degree - p2.degree)
+
+        divisorTerms.append(divisorVal)
+        newP1 = Polynomial.polify(p1 - (p2 * divisorVal)).simplify()
+        divisorTerms.append(newP1._divider(p2, op))
+        if op == "modulo":
+            return divisorTerms.pop()
+        return sum(divisorTerms)
+
+    @staticmethod
+    def polify(p):
+        if Polynomial.isPolynomial(p):
+            return p
+        return Polynomial([p]) if utils.isnumeric(p) else Polynomial(p.terms)
+
+    @property
+    def degree(self):
+        degree_fn = lambda x: 0 if utils.isnumeric(x) else x.exp
+        return max(list(map(degree_fn, self.terms)))
+
+    @staticmethod
+    def isPolynomial(p):
+        return isinstance(p, Polynomial)
 
     # Done
     def __str__(self):
         output = ""
         for term in self.terms:
-            c, exp = term.c, term.exp
+            c = exp = 0
+            if utils.isnumeric(term):
+                c = term
+            else:
+                c, exp = term.c, term.exp
             if c == 0:
                 continue
             elif exp == 0:
                 output += str(c) + " + "
             elif c == 1:
-                output +="^" + str(exp) + " + "
+                output += "x^" + str(exp) + " + "
             else:
-                output += str(c) +  "^" + str(exp) + " + "
+                output += str(c) +  "x^" + str(exp) + " + "
         output = output[: len(output) - 3]
+        if output == "":
+            return "0"
         return output
 
 ##############################
@@ -474,7 +498,7 @@ class MultTerm(Term):
 
 class PowerTerm(Term):
 
-    def __init__(self, coefficient=1, main=X(), exp=1):
+    def __init__(self, coefficient=1, main = X(), exp=1):
         super(PowerTerm, self).__init__()
         assert utils.isnumeric(coefficient), "Coefficient must be a number"
         assert Expression.isExpression(main)
@@ -502,7 +526,9 @@ class PowerTerm(Term):
                    ), "Arguements must be of type ExponentialTerm"
         if p2 == 0:
             return p1
-        if PowerTerm.isPwrTerm(p2) and p1.exp == p2.exp and p1.main == p2.main:
+        if p1.exp == 0 and utils.isnumeric(p2):
+            return p2 + p1.c
+        if PowerTerm.isPwrTerm(p2) and p1.exp == p2.exp and p1.main == p2.main: # ERROR HERE WITH VAR
             return PowerTerm(p1.c + p2.c, p1.main, p1.exp)
         else:
             return Expression([p1, p2])
@@ -646,12 +672,11 @@ class LogTerm(Term):
         coeff = str(self.c) if self.c != 1 else ""
         return coeff + "log_" + base + "(" + str(self.insideTerm) + ")"
 
-y = X("y")
-z = X("z")
+
 x = X()
-#
-a = ((512*y*3) / (12 * y)) * z / x
-a = a.simplify()
-print(a)
-# print(a((y, 1), (z, 1),(x, 1) ))
-# print(y((y,2)))
+# p = Polynomial([x**2, x**2])
+# print(p._combine_terms().terms[0])
+# p1 = Polynomial.polify( x**2 )
+# p2 = Polynomial.polify(PowerTerm(1, x, 1) + 1)
+# div = p1 % p2
+# print(div)
